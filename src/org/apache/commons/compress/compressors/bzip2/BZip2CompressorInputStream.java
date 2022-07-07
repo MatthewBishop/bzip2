@@ -56,8 +56,6 @@ public class BZip2CompressorInputStream extends InputStream
      */
     private int blockSize100k;
 
-    private final CRC crc = new CRC();
-
     private int nInUse;
 
     private BitInputStream bin;
@@ -70,9 +68,6 @@ public class BZip2CompressorInputStream extends InputStream
     private static final int NO_RAND_PART_C_STATE = 7;
 
     private int currentState = START_BLOCK_STATE;
-
-    private int storedBlockCRC, storedCombinedCRC;
-    private int computedBlockCRC, computedCombinedCRC;
 
     // Variables used by setup* methods exclusively
 
@@ -251,8 +246,6 @@ public class BZip2CompressorInputStream extends InputStream
 
         this.blockSize100k = blockSize - '0';
 
-        this.computedCombinedCRC = 0;
-
         return true;
     }
 
@@ -298,7 +291,7 @@ public class BZip2CompressorInputStream extends InputStream
             this.currentState = EOF;
             throw new IOException("Bad block header");
         }
-        this.storedBlockCRC = bsGetInt(bin);
+        int storedBlockCRC = bsGetInt(bin);
         boolean blockRandomised = bsR(bin, 1) == 1;
         if(blockRandomised)
             throw new IOException("Block randomization is not supported.");
@@ -313,37 +306,13 @@ public class BZip2CompressorInputStream extends InputStream
         // currBlockNo++;
         getAndMoveToFrontDecode();
 
-        this.crc.initializeCRC();
         this.currentState = START_BLOCK_STATE;
     }
 
-    private void endBlock() throws IOException {
-        this.computedBlockCRC = this.crc.getFinalCRC();
-
-        // A bad CRC is considered a fatal error.
-        if (this.storedBlockCRC != this.computedBlockCRC) {
-            // make next blocks readable without error
-            // (repair feature, not yet documented, not tested)
-            this.computedCombinedCRC = (this.storedCombinedCRC << 1)
-                | (this.storedCombinedCRC >>> 31);
-            this.computedCombinedCRC ^= this.storedBlockCRC;
-
-            throw new IOException("BZip2 CRC error");
-        }
-
-        this.computedCombinedCRC = (this.computedCombinedCRC << 1)
-            | (this.computedCombinedCRC >>> 31);
-        this.computedCombinedCRC ^= this.computedBlockCRC;
-    }
-
     private boolean complete() throws IOException {
-        this.storedCombinedCRC = bsGetInt(bin);
+        int storedCombinedCRC = bsGetInt(bin);
         this.currentState = EOF;
         this.data = null;
-
-        if (this.storedCombinedCRC != this.computedCombinedCRC) {
-            throw new IOException("BZip2 CRC error");
-        }
 
         // Look for the next .bz2 stream if decompressing
         // concatenated files.
@@ -775,11 +744,9 @@ public class BZip2CompressorInputStream extends InputStream
             this.su_tPos = this.data.tt[this.su_tPos];
             this.su_i2++;
             this.currentState = NO_RAND_PART_B_STATE;
-            this.crc.updateCRC(su_ch2Shadow);
             return su_ch2Shadow;
         }
         this.currentState = NO_RAND_PART_A_STATE;
-        endBlock();
         initBlock();
         return setupBlock();
     }
@@ -802,7 +769,6 @@ public class BZip2CompressorInputStream extends InputStream
     private int setupNoRandPartC() throws IOException {
         if (this.su_j2 < this.su_z) {
             final int su_ch2Shadow = this.su_ch2;
-            this.crc.updateCRC(su_ch2Shadow);
             this.su_j2++;
             this.currentState = NO_RAND_PART_C_STATE;
             return su_ch2Shadow;
