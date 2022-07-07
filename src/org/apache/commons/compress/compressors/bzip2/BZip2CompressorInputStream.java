@@ -24,7 +24,6 @@
  */
 package org.apache.commons.compress.compressors.bzip2;
 
-import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteOrder;
@@ -57,8 +56,6 @@ public class BZip2CompressorInputStream extends InputStream
      */
     private int blockSize100k;
 
-    private boolean blockRandomised;
-
     private final CRC crc = new CRC();
 
     private int nInUse;
@@ -68,9 +65,6 @@ public class BZip2CompressorInputStream extends InputStream
 
     private static final int EOF = 0;
     private static final int START_BLOCK_STATE = 1;
-    private static final int RAND_PART_A_STATE = 2;
-    private static final int RAND_PART_B_STATE = 3;
-    private static final int RAND_PART_C_STATE = 4;
     private static final int NO_RAND_PART_A_STATE = 5;
     private static final int NO_RAND_PART_B_STATE = 6;
     private static final int NO_RAND_PART_C_STATE = 7;
@@ -87,8 +81,6 @@ public class BZip2CompressorInputStream extends InputStream
     private int su_chPrev;
     private int su_i2;
     private int su_j2;
-    private int su_rNToGo;
-    private int su_rTPos;
     private int su_tPos;
     private char su_z;
 
@@ -211,15 +203,6 @@ public class BZip2CompressorInputStream extends InputStream
         case START_BLOCK_STATE:
             return setupBlock();
 
-        case RAND_PART_A_STATE:
-            throw new IllegalStateException();
-
-        case RAND_PART_B_STATE:
-            return setupRandPartB();
-
-        case RAND_PART_C_STATE:
-            return setupRandPartC();
-
         case NO_RAND_PART_A_STATE:
             throw new IllegalStateException();
 
@@ -316,8 +299,9 @@ public class BZip2CompressorInputStream extends InputStream
             throw new IOException("Bad block header");
         }
         this.storedBlockCRC = bsGetInt(bin);
-        this.blockRandomised = bsR(bin, 1) == 1;
-
+        boolean blockRandomised = bsR(bin, 1) == 1;
+        if(blockRandomised)
+            throw new IOException("Block randomization is not supported.");
         /*
          * Allocate data here instead in constructor, so we do not allocate
          * it if the input file is empty.
@@ -779,37 +763,7 @@ public class BZip2CompressorInputStream extends InputStream
         this.su_i2 = 0;
         this.su_ch2 = 256; /* not a char and not EOF */
 
-        if (this.blockRandomised) {
-            this.su_rNToGo = 0;
-            this.su_rTPos = 0;
-            return setupRandPartA();
-        }
         return setupNoRandPartA();
-    }
-
-    private int setupRandPartA() throws IOException {
-        if (this.su_i2 <= this.last) {
-            this.su_chPrev = this.su_ch2;
-            int su_ch2Shadow = this.data.ll8[this.su_tPos] & 0xff;
-            checkBounds(this.su_tPos, this.data.tt.length, "su_tPos");
-            this.su_tPos = this.data.tt[this.su_tPos];
-            if (this.su_rNToGo == 0) {
-                this.su_rNToGo = Rand.rNums(this.su_rTPos) - 1;
-                if (++this.su_rTPos == 512) {
-                    this.su_rTPos = 0;
-                }
-            } else {
-                this.su_rNToGo--;
-            }
-            this.su_ch2 = su_ch2Shadow ^= (this.su_rNToGo == 1) ? 1 : 0;
-            this.su_i2++;
-            this.currentState = RAND_PART_B_STATE;
-            this.crc.updateCRC(su_ch2Shadow);
-            return su_ch2Shadow;
-        }
-        endBlock();
-        initBlock();
-        return setupBlock();
     }
 
     private int setupNoRandPartA() throws IOException {
@@ -828,47 +782,6 @@ public class BZip2CompressorInputStream extends InputStream
         endBlock();
         initBlock();
         return setupBlock();
-    }
-
-    private int setupRandPartB() throws IOException {
-        if (this.su_ch2 != this.su_chPrev) {
-            this.currentState = RAND_PART_A_STATE;
-            this.su_count = 1;
-            return setupRandPartA();
-        }
-        if (++this.su_count < 4) {
-            this.currentState = RAND_PART_A_STATE;
-            return setupRandPartA();
-        }
-        this.su_z = (char) (this.data.ll8[this.su_tPos] & 0xff);
-        checkBounds(this.su_tPos, this.data.tt.length, "su_tPos");
-        this.su_tPos = this.data.tt[this.su_tPos];
-        if (this.su_rNToGo == 0) {
-            this.su_rNToGo = Rand.rNums(this.su_rTPos) - 1;
-            if (++this.su_rTPos == 512) {
-                this.su_rTPos = 0;
-            }
-        } else {
-            this.su_rNToGo--;
-        }
-        this.su_j2 = 0;
-        this.currentState = RAND_PART_C_STATE;
-        if (this.su_rNToGo == 1) {
-            this.su_z ^= 1;
-        }
-        return setupRandPartC();
-    }
-
-    private int setupRandPartC() throws IOException {
-        if (this.su_j2 < this.su_z) {
-            this.crc.updateCRC(this.su_ch2);
-            this.su_j2++;
-            return this.su_ch2;
-        }
-        this.currentState = RAND_PART_A_STATE;
-        this.su_i2++;
-        this.su_count = 0;
-        return setupRandPartA();
     }
 
     private int setupNoRandPartB() throws IOException {
